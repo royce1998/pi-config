@@ -34,7 +34,15 @@ Defined in `~/.pi/.gitignore`:
 
 ## Save changes (commit + push)
 
-Run from the repo root. ALWAYS sanity-check for secrets first.
+Preferred: use the helper script, which runs the secret safety check, commits,
+and pushes in one step (pass an optional message):
+
+```bash
+bash ~/.pi/agent/skills/pi-config/scripts/sync.sh "describe the change"
+```
+
+It exits non-zero without pushing if any secret/personal/ignored file is
+staged. Manual equivalent, run from the repo root (ALWAYS check for secrets first):
 
 ```bash
 cd ~/.pi
@@ -64,11 +72,13 @@ echo '<path>' >> ~/.pi/.gitignore
 
 ```bash
 git clone https://github.com/royce1998/pi-config ~/.pi
-cd ~/.pi/agent/extensions/browser && npm install    # restore extension deps
-# Re-authenticate (creates a local, untracked agent/auth.json):
-pi        # then run /login for the provider
+bash ~/.pi/agent/skills/pi-config/scripts/setup.sh   # pulls latest + npm install for extensions
+# Then re-authenticate (creates a local, untracked agent/auth.json):
+pi        # run /login for the provider
 # Optional: reinstall fd/rg into agent/bin if a skill needs them.
 ```
+
+The `setup.sh` script is safe to re-run; it also does the `git pull` for you.
 
 ## Pull latest on an existing machine
 

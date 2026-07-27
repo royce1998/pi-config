@@ -345,6 +345,35 @@ own browser; the agent only handles the local files and the `gmail_cli.py` comma
    `python gmail_cli.py whoami`. **The agent must never type Google credentials or click through
    Google consent in the automated browser.** Then update `profile.json` → `gmail.enabled = true`.
 
+**Request ALL scopes in this ONE consent** so you never have to re-consent later just to add
+forwarding filters. The default `gmail_cli.py auth` only asks for `gmail.modify` + `gmail.compose`;
+if the user is likely to want auto-forwarding/inbox-organizing filters (they usually are — see
+"Forwarding filters" below), instead run a combined consent that ALSO requests
+`gmail.settings.basic` + `gmail.settings.sharing`, and write BOTH `token.json` (for `gmail_cli.py`)
+and `token_settings.json` (for `gmail_forward_setup.py`) from the same grant. Ask the user up front
+whether they want important mail auto-forwarded/organized; if yes (or unsure), grab all four scopes now.
+
+**If background processes don't persist in your shell** (e.g. this Windows/git-bash setup — `cmd &`
+jobs get reaped and the log file is never written), `run_local_server` auth (used by BOTH
+`gmail_cli.py auth` and `gmail_forward_setup.py auth`) will NOT work, because it needs a loopback
+server alive while the user consents. Fall back to a **manual copy-the-code flow** with a tiny
+helper script beside `credentials.json` (see Ivan's `gmail/manual_auth.py` for a working template):
+   - Use `google_auth_oauthlib.flow.Flow` (not `InstalledAppFlow.run_local_server`) with
+     `redirect_uri = "http://localhost"` and **PKCE disabled** (`autogenerate_code_verifier=False`) so
+     the URL-gen and token-exchange invocations don't need shared state (otherwise you get
+     `invalid_grant: Missing code verifier`). Set `OAUTHLIB_INSECURE_TRANSPORT=1` and
+     `OAUTHLIB_RELAX_TOKEN_SCOPE=1` in the script's env.
+   - Phase 1 `url`: print the `authorization_url(access_type="offline", prompt="consent")` and give
+     it to the user on ONE line.
+   - The user approves; Google redirects to `http://localhost/?code=...` (browser shows "can't reach
+     this page" — expected). They copy the FULL address-bar URL back to you.
+   - Phase 2 `token`: `fetch_token(code=<the code param>)` (pass the bare `code`, not the whole URL, to
+     avoid the https-required error), then write the token file(s). Confirm with `whoami`.
+   Each auth code is single-use — if an exchange fails, regenerate a fresh URL.
+
+**When you give the user anything to copy (auth URLs, codes, commands), put it on ONE line** (a
+single-line code block, no wrapping) so it's trivial to copy-paste.
+
 If any step is genuinely blocked (e.g. the account can't create GCP projects, or org policy forbids
 it), tell the user exactly what's blocking and what you need from them — by anti-ban policy ALL
 google.com steps (sign-in, Cloud Console, consent/Allow) are human-only; never automate them in the
@@ -422,6 +451,10 @@ disturbs the job-search CLI's `token.json`:
 
 Two steps are **human-only** (all google.com consent is human-only): approving the new scopes, and
 (if the destination isn't already verified) clicking the verification link Gmail emails to it.
+
+**If you already grabbed all four scopes in the initial setup consent** (recommended above) and
+`token_settings.json` exists, SKIP step 1 (re-consent) entirely — go straight to step 2
+(`list-forward` / `add-forward`) and step 3 (`create-filter`).
 
 Flow:
 1. **Re-consent for the settings scopes.** From the person's `gmail/` dir run
