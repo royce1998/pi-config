@@ -1,0 +1,36 @@
+# =============================================================
+#  pi config repo — track skills/extensions/settings only.
+#  Ignore secrets, personal data, big regenerable dirs.
+# =============================================================
+
+# ---- Secrets / auth ----
+agent/auth.json
+**/token.json
+**/tokens*.txt
+**/*credential*
+**/*secret*
+**/client_secret*.json
+*.pem
+*.key
+
+# ---- Personal data & huge regenerable dirs ----
+# (job-search DATA dir = browser profiles, gmail tokens, resumes; bin = fd/rg exe)
+agent/sessions/
+agent/fleet/
+agent/job-search/
+agent/bin/
+
+# ---- Dependencies (reinstall with npm install) ----
+**/node_modules/
+
+# ---- Runtime artifacts inside the job-search SKILL (keep the skill, drop the junk) ----
+agent/skills/job-search/scripts/arthur_unread.json
+agent/skills/job-search/scripts/auth_arthur.log
+agent/skills/job-search/scripts/*.log
+agent/skills/job-search/scripts/err.txt
+agent/skills/**/token.json
+
+# ---- Misc noise ----
+*.log
+.DS_Store
+Thumbs.db

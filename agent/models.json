@@ -1,0 +1,31 @@
+{
+  "providers": {
+    "github-copilot": {
+      "modelOverrides": {
+        "claude-opus-4.8": {
+          "contextWindow": 1000000
+        }
+      }
+    },
+    "ollama": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "compat": {
+        "supportsDeveloperRole": false,
+        "supportsReasoningEffort": false
+      },
+      "models": [
+        {
+          "id": "gurubot/gpt-oss-derestricted:20b",
+          "name": "GPT-OSS Derestricted 20B (Local)",
+          "reasoning": true,
+          "input": ["text"],
+          "contextWindow": 131072,
+          "maxTokens": 32768,
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+        }
+      ]
+    }
+  }
+}

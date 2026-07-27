@@ -1,0 +1,14 @@
+{
+  "name": "pi-browser",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Site-agnostic browser control tools for pi (job-search helper).",
+  "dependencies": {
+    "playwright-core": "^1.55.0"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
