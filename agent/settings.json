@@ -3,7 +3,7 @@
   "theme": "dark",
   "defaultProvider": "github-copilot",
   "defaultModel": "claude-opus-4.8",
-  "defaultThinkingLevel": "xhigh",
+  "defaultThinkingLevel": "max",
   "hideThinkingBlock": true,
   "compaction": {
     "enabled": true,

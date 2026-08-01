@@ -74,6 +74,10 @@ mix one person's applications into another's tracker.
    Access email ONLY through the Gmail API (`gmail_cli.py`). Any step on a `google.com` domain
    (sign-in, Cloud Console, OAuth consent/Allow) is **human-only** — hand it to the user. If the API
    isn't set up, email features are simply unavailable; do NOT fall back to the browser for email.
+9. **Never use em-dashes in anything you write** (resumes, cover letters, screening answers,
+   essays, emails, or tracker notes). Use commas, colons, parentheses, or a period instead.
+   En-dashes in date ranges like "2016-2020" are fine. Em-dashes read as AI-generated, and Royce
+   does not want them anywhere in his applications or materials.
 
 ## When something unexpected happens (reason + proceed autonomously)
 
@@ -103,6 +107,34 @@ problem or error, **be creative and reason it out; don't just stop or give up.**
 
 The goal: behave like a resourceful person who hits a snag, thinks it through, solves what they
 reasonably can, and keeps making progress — escalating only what actually requires the user.
+
+## The stuck rule — never loop on one posting (mark it STUCK and move on)
+
+Getting *stuck* — repeating the same action, retrying a wall, re-scanning an exhausted pool, or
+idling for input — is a WORSE failure than skipping a job. Success is measured in *net-new submitted
+applications*, not time spent. Enforce a hard budget:
+
+1. **Two-strike per-posting cap.** Make at most **two** distinct fix attempts on any single
+   blocker. If the posting still isn't submitted, STOP: append ONE line to `pending_ai_check.md`
+   (`| YYYY-MM-DD | Company | Role | <link> | STUCK: <one-line reason> |`) and immediately go to
+   the next posting. Never attempt the same wall a third time, and never reopen a posting you
+   already marked STUCK.
+2. **Recognize known human-only walls on sight and skip after ONE look** (don't spend your two
+   strikes discovering them): hCaptcha/reCAPTCHA image-select or drag challenges; a
+   Workday/Lever/iCIMS **native OS file dialog** for resume upload (the "Select files" trigger is
+   not an `<input>` you can target with `browser_upload`); "record a video of yourself"; phone/SMS
+   verification; and any "are you human / are you an AI?" attestation. Log → next. (An emailed
+   verification CODE is NOT a wall — fetch it via `gmail_cli.py`, never the browser.)
+3. **Pool-exhaustion pivot, not re-scan.** If two postings in a row are all duplicate/cap-hit/
+   ineligible, switch to a *different* source, role title, or geography within your shard — do NOT
+   re-run the same ATS tokens/keywords/time-window you already tried. Only conclude a shard is
+   exhausted after trying clearly different sources (e.g. move from health-tech Greenhouse to
+   governmentjobs.com districts, or from remote CS to local front-desk).
+4. **Step budget per posting.** Diagnose once, try one alternative, then log STUCK and move on. If
+   the form isn't advancing after a bounded number of actions, it's a skip.
+5. **When in doubt, skip the hard one and apply to an easy honest-fit one instead.** A stalled
+   worker that stops making progress gets killed by the supervisor — pivoting keeps it alive and
+   productive.
 
 ## Core loop for interacting with a page
 
@@ -576,6 +608,30 @@ Example (`/parallel`, abbreviated):
 
 When the run finishes, merge each `applications.wNN.md` into `applications.md`, report the totals,
 and hand back any `pending_ai_check.md` items (they need the user to clear a human gate).
+
+## Running two job hunts at once (different people) — no conflicts
+
+Multiple job-search sessions can run at the same time (e.g. one agent per person). Keep them fully
+isolated so they never collide on Chrome or on files:
+
+- **Never share a Chrome user-data-dir between two people/sessions.** Chrome allows only one process
+  per profile dir; two sessions on the same dir fight over the singleton lock and only one browser
+  works. Scope every profile to the person: for `parallel_apply` pass a person-specific
+  `profileBaseDir` (e.g. `<person-folder>/.parallel-profiles`) AND set `cwd` to that person's
+  folder; for a single-agent session set `PI_BROWSER_PROFILE_DIR` to a person-specific path
+  (e.g. `<person-folder>/browser-profile`). The default base is `<cwd>/.parallel-profiles`, so
+  giving each run the person's own `cwd` already separates them — but set it explicitly whenever you
+  know another session is running.
+- **Keep `progressCommand` scoped to the person's `cwd`** so one run's count never reads another
+  person's tracker rows.
+- **Per-person files already separate identities** (`profile.json`, `resume.md`, trackers, and
+  `gmail/` each live in the person's folder). Gmail tokens are per person
+  (`<person>/gmail/token.json`); always pass the matching `--profile <name>`.
+- **Don't reuse worker-number ranges across concurrent runs of the SAME person.** If one run owns
+  `applications.w22–w31.md`, a continuation must use a fresh range (e.g. `w32+`) so two workers
+  never append to one file.
+- **Different people applying to the same company is fine** (separate identities/emails); the
+  3-per-company cap is enforced per person within that person's own trackers.
 
 ## Handy entry points
 
