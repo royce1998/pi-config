@@ -127,7 +127,11 @@ def get_service(args, *, interactive_ok=True):
 
     creds = None
     if token_path.exists():
-        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
+        # Load with the token's OWN granted scopes (do NOT force SCOPES here).
+        # A read-only token (e.g. Royce's gmail.readonly) would otherwise send
+        # modify+compose on refresh and fail with invalid_scope. New consents
+        # still request the full SCOPES via the auth flow below.
+        creds = Credentials.from_authorized_user_file(str(token_path))
 
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
