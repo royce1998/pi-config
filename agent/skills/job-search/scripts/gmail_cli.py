@@ -48,7 +48,26 @@ import sys
 from email.message import EmailMessage
 from pathlib import Path
 
-DEFAULT_BASE_DIR = Path("C:/Users/Royce/.pi/agent/job-search")
+def _default_base_dir() -> Path:
+    # Explicit override for non-standard layouts.
+    env = os.environ.get("JOB_SEARCH_DIR")
+    if env:
+        return Path(env)
+    # The job-search DATA dir lives at <pi-home>/agent/job-search, while this
+    # script lives at <pi-home>/agent/skills/job-search/scripts/gmail_cli.py.
+    # Derive it from this file so the CLI is portable across machines and OSes
+    # (Windows dev box, Linux VM, etc.) with no hardcoded per-machine path.
+    try:
+        derived = Path(__file__).resolve().parents[3] / "job-search"
+        if derived.exists():
+            return derived
+    except (IndexError, OSError):
+        pass
+    # Legacy fallback (original Windows dev path).
+    return Path("C:/Users/Royce/.pi/agent/job-search")
+
+
+DEFAULT_BASE_DIR = _default_base_dir()
 
 # Read + modify (labels, mark read/unread) and compose (create drafts, send).
 # gmail.compose covers sending; gmail.modify covers reading and labels. Neither
