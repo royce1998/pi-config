@@ -34,3 +34,16 @@ agent/skills/**/token.json
 *.log
 .DS_Store
 Thumbs.db
+
+# Alpaca runtime state — local only, never committed (policy, ledgers, audit, journal, published strategy)
+agent/alpaca-policy.json
+agent/alpaca-credentials.json
+agent/alpaca-audit.jsonl
+agent/alpaca-journal.jsonl
+agent/alpaca-ledger-*.json
+agent/alpaca-strategy.json
+# Regenerable caches / stores / mcp config
+agent/mcp.json
+agent/mcp-cache.json
+agent/models-store.json
+agent/npm/

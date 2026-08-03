@@ -5,7 +5,8 @@
         "claude-opus-4.8": {
           "contextWindow": 1000000
         }
-      }
+      },
+      "baseUrl": "https://api.enterprise.githubcopilot.com"
     },
     "ollama": {
       "baseUrl": "http://localhost:11434/v1",
@@ -20,10 +21,17 @@
           "id": "gurubot/gpt-oss-derestricted:20b",
           "name": "GPT-OSS Derestricted 20B (Local)",
           "reasoning": true,
-          "input": ["text"],
+          "input": [
+            "text"
+          ],
           "contextWindow": 131072,
           "maxTokens": 32768,
-          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          }
         }
       ]
     },
@@ -31,25 +39,43 @@
       "baseUrl": "https://openrouter.ai/api/v1",
       "api": "openai-completions",
       "apiKey": "$OPENROUTER_API_KEY",
-      "compat": { "thinkingFormat": "openrouter" },
+      "compat": {
+        "thinkingFormat": "openrouter"
+      },
       "models": [
         {
           "id": "anthropic/claude-opus-5",
           "name": "Claude Opus 5 (OpenRouter)",
           "reasoning": true,
-          "input": ["text", "image"],
+          "input": [
+            "text",
+            "image"
+          ],
           "contextWindow": 1000000,
           "maxTokens": 128000,
-          "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 6.25 }
+          "cost": {
+            "input": 5,
+            "output": 25,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
+          }
         },
         {
           "id": "openai/gpt-5.6-sol",
           "name": "GPT-5.6 Sol (OpenRouter)",
           "reasoning": true,
-          "input": ["text", "image"],
+          "input": [
+            "text",
+            "image"
+          ],
           "contextWindow": 400000,
           "maxTokens": 128000,
-          "cost": { "input": 5, "output": 30, "cacheRead": 0.5, "cacheWrite": 6.25 }
+          "cost": {
+            "input": 5,
+            "output": 30,
+            "cacheRead": 0.5,
+            "cacheWrite": 6.25
+          }
         }
       ]
     }

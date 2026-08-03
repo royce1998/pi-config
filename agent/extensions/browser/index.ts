@@ -14,9 +14,34 @@ import { Type } from "typebox";
 import { chromium, type BrowserContext, type Page, type Locator } from "playwright-core";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
+import { assertPublicHttpUrl, installPublicNetworkGuard } from "./public-safety.mjs";
 
 const DATA_DIR = join(homedir(), ".pi", "agent", "job-search");
+const PUBLIC_MODE = process.env.PI_BROWSER_PUBLIC_MODE === "1";
+const HEADLESS = process.env.PI_BROWSER_HEADLESS === "1";
+
+function findChromiumExecutable(): string | undefined {
+  const configured = process.env.PI_BROWSER_EXECUTABLE_PATH?.trim();
+  if (configured && existsSync(configured)) return configured;
+  const cache = join(homedir(), ".cache", "ms-playwright");
+  try {
+    const versions = readdirSync(cache, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && /^chromium-\d+$/u.test(entry.name))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse();
+    for (const version of versions) {
+      const executable = join(cache, version, "chrome-linux", "chrome");
+      if (existsSync(executable)) return executable;
+    }
+  } catch {
+    // Fall back to Playwright's installed Chrome channel lookup.
+  }
+  return undefined;
+}
+
+const CHROMIUM_EXECUTABLE = findChromiumExecutable();
 // Per-worker isolation: each parallel pi worker sets PI_BROWSER_PROFILE_DIR to its
 // own Chrome profile so multiple workers can each drive their own window. Falls back
 // to the shared default when unset (single-session behavior, unchanged).
@@ -54,11 +79,13 @@ async function launchContext(): Promise<void> {
   let ctx: BrowserContext;
   try {
     ctx = await chromium.launchPersistentContext(PROFILE_DIR, {
-      channel: "chrome",
-      headless: false,
-      viewport: null,
+      ...(CHROMIUM_EXECUTABLE ? { executablePath: CHROMIUM_EXECUTABLE } : { channel: "chrome" }),
+      headless: HEADLESS,
+      viewport: HEADLESS ? { width: 1440, height: 900 } : null,
+      serviceWorkers: PUBLIC_MODE ? "block" : "allow",
       args: ["--start-maximized", "--disable-blink-features=AutomationControlled"],
     });
+    if (PUBLIC_MODE) await installPublicNetworkGuard(ctx);
   } catch (e) {
     throw new Error(
       `Could not launch Chrome for profile "${PROFILE_DIR}". ` +
@@ -303,6 +330,47 @@ function staleRefMsg(ref: string) {
   );
 }
 
+async function confirmPublicAction(
+  page: Page,
+  locator: Locator | null,
+  ctx: { ui: { confirm: (title: string, message: string, options?: { timeout?: number }) => Promise<boolean> } },
+  action: string,
+  always = false,
+): Promise<void> {
+  if (!PUBLIC_MODE) return;
+  let description = action;
+  let sensitive = always;
+  if (locator) {
+    const details = await locator
+      .evaluate((element) => {
+        const input = element as HTMLInputElement;
+        const text =
+          element.getAttribute("aria-label") ||
+          input.value ||
+          (element as HTMLElement).innerText ||
+          element.textContent ||
+          element.getAttribute("title") ||
+          "unlabeled control";
+        return { text: text.replace(/\s+/g, " ").trim().slice(0, 240), type: input.type || "" };
+      })
+      .catch(() => ({ text: "unlabeled control", type: "" }));
+    description = `${action}: ${details.text}`;
+    sensitive =
+      sensitive ||
+      details.type.toLowerCase() === "submit" ||
+      /\b(?:submit|send|apply|finish|complete|withdraw|delete|remove|purchase|buy|place order|accept offer|confirm application)\b/iu.test(
+        details.text,
+      );
+  }
+  if (!sensitive) return;
+  const approved = await ctx.ui.confirm(
+    "Approve consequential browser action?",
+    `${description}\n\nPage: ${page.url().slice(0, 500)}\n\nApprove this one action only?`,
+    { timeout: 5 * 60 * 1000 },
+  );
+  if (!approved) throw new Error("Consequential browser action was denied by the public web user");
+}
+
 export default function browserExtension(pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     await closeBrowser();
@@ -324,6 +392,7 @@ export default function browserExtension(pi: ExtensionAPI) {
     async execute(_id, params) {
       const page = await ensureBrowser();
       if (params.url) {
+        if (PUBLIC_MODE) await assertPublicHttpUrl(params.url);
         await page.goto(params.url, { waitUntil: "domcontentloaded" }).catch(() => {});
       }
       const snap = await takeSnapshot(page);
@@ -341,6 +410,7 @@ export default function browserExtension(pi: ExtensionAPI) {
     }),
     async execute(_id, params) {
       const page = await ensureBrowser();
+      if (PUBLIC_MODE) await assertPublicHttpUrl(params.url);
       await page.goto(params.url, { waitUntil: "domcontentloaded" }).catch(() => {});
       const snap = await takeSnapshot(page);
       return txt(snap.text, { count: snap.count });
@@ -395,11 +465,12 @@ export default function browserExtension(pi: ExtensionAPI) {
     parameters: Type.Object({
       ref: Type.String({ description: 'Element ref, e.g. "e12"' }),
     }),
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       const page = await ensureBrowser();
       const loc = await resolveRef(page, params.ref);
       if (!loc) return staleRefMsg(params.ref);
       await loc.scrollIntoViewIfNeeded().catch(() => {});
+      await confirmPublicAction(page, loc, ctx, "Click");
       await loc.click({ timeout: ACTION_TIMEOUT });
       await page.waitForTimeout(500);
       const snap = await takeSnapshot(page);
@@ -421,13 +492,14 @@ export default function browserExtension(pi: ExtensionAPI) {
         Type.Boolean({ description: "Press Enter after filling (default false)" }),
       ),
     }),
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       const page = await ensureBrowser();
       const loc = await resolveRef(page, params.ref);
       if (!loc) return staleRefMsg(params.ref);
       await loc.scrollIntoViewIfNeeded().catch(() => {});
       await loc.fill(params.value, { timeout: ACTION_TIMEOUT });
       if (params.submit) {
+        await confirmPublicAction(page, loc, ctx, "Press Enter after filling", true);
         await loc.press("Enter");
         await page.waitForTimeout(600);
       }
@@ -523,7 +595,7 @@ export default function browserExtension(pi: ExtensionAPI) {
         }
       }
       // 3) Keyboard fallback: highlight first match, select.
-      if (!method && typed) {
+      if (!method && typed && !PUBLIC_MODE) {
         await loc.press("ArrowDown").catch(() => {});
         await loc.press("Enter").catch(() => {});
         method = "keyboard";
@@ -593,13 +665,15 @@ export default function browserExtension(pi: ExtensionAPI) {
       key: Type.String({ description: 'Key name, e.g. "Enter"' }),
       ref: Type.Optional(Type.String({ description: "Optional element ref to focus first" })),
     }),
-    async execute(_id, params) {
+    async execute(_id, params, _signal, _onUpdate, ctx) {
       const page = await ensureBrowser();
       if (params.ref) {
         const loc = await resolveRef(page, params.ref);
         if (!loc) return staleRefMsg(params.ref);
+        if (params.key.toLowerCase() === "enter") await confirmPublicAction(page, loc, ctx, "Press Enter", true);
         await loc.press(params.key);
       } else {
+        if (params.key.toLowerCase() === "enter") await confirmPublicAction(page, null, ctx, "Press Enter", true);
         await page.keyboard.press(params.key);
       }
       await page.waitForTimeout(400);
