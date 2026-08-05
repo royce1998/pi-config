@@ -196,11 +196,17 @@ export default function traderTools(pi: ExtensionAPI) {
 			thesis: Type.String(),
 			profile: Type.Union([Type.Literal("paper"), Type.Literal("live")]),
 			result: Type.String(),
+			primary_signal: Type.Optional(Type.String({ description: "The single dominant signal for attribution (from signal_weights keys)" })),
+			expected_edge_bps: Type.Optional(Type.Number({ description: "Pre-trade expected edge in basis points, for calibration" })),
+			expected_win_prob: Type.Optional(Type.Number({ description: "Pre-trade estimated win probability 0..1" })),
+			predicted_holding_days: Type.Optional(Type.Number({ description: "Expected holding period in trading days" })),
+			regime: Type.Optional(Type.String({ description: "Regime label at decision time (risk_on/neutral/risk_off)" })),
 		}),
 		async execute(_id, params) {
 			rejectPathArguments(params as Record<string, unknown>);
 			const profile = String(params.profile);
 			if (profile !== "paper" && profile !== "live") throw new Error("profile must be paper or live");
+			const finiteOrNull = (v: unknown) => (Number.isFinite(Number(v)) ? Number(v) : null);
 			const entry = {
 				ts: new Date().toISOString(),
 				signal: cleanText(params.signal, 120),
@@ -210,6 +216,12 @@ export default function traderTools(pi: ExtensionAPI) {
 				thesis: cleanText(params.thesis, 2000),
 				profile,
 				result: cleanText(params.result, 1000),
+				// Structured expected-outcome fields (B-19) so calibration is computable, not prose.
+				primary_signal: cleanText(params.primary_signal, 120) || null,
+				expected_edge_bps: finiteOrNull(params.expected_edge_bps),
+				expected_win_prob: finiteOrNull(params.expected_win_prob),
+				predicted_holding_days: finiteOrNull(params.predicted_holding_days),
+				regime: cleanText(params.regime, 40) || null,
 			};
 			if (!entry.signal || !entry.thesis || !entry.result) throw new Error("signal, thesis, and result are required");
 			const day = new Date().toISOString().slice(0, 10);

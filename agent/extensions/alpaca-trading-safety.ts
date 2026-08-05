@@ -51,6 +51,10 @@ type Policy = {
 	allowCrypto: boolean;
 	symbolAllowlist: string[];
 	symbolBlocklist: string[];
+	/** Hard ceiling on gross exposure as a % of equity, enforced on exposure-increasing orders (B-08). Absent = off. */
+	maxGrossExposurePct?: number;
+	/** Cap on a single option order's premium as a % of account equity (B-40a). Absent = off. */
+	maxOptionPremiumPctEquity?: number;
 	/**
 	 * Per-credential-profile overrides, merged over the base policy by the name in
 	 * alpaca-credentials.json. Without this, one set of caps sized for a large
@@ -438,7 +442,71 @@ async function estimateNotional(
 
 /* -------------------------------------------------------------- the gate */
 
-type Decision = { allowed: boolean; reasons: string[]; notional?: number; basis: string };
+const RISK_HALT_PATH = process.env.ALPACA_RISK_HALT_PATH || "/home/ubuntu/alpaca-agent/state/risk-halt.json";
+
+/** Deterministic risk breaker written by the guardian (B-08). Local file read, never network. */
+function readRiskHalt(profile: string): { halted: boolean; reason?: string } {
+	try {
+		const raw = JSON.parse(readFileSync(RISK_HALT_PATH, "utf8")) as {
+			profiles?: Record<string, { halted?: boolean; reason?: string; ts?: number }>;
+		};
+		const e = raw.profiles?.[profile];
+		if (e?.halted && (typeof e.ts !== "number" || Date.now() - e.ts < 26 * 3600_000)) {
+			return { halted: true, reason: e.reason ?? "risk breaker engaged" };
+		}
+	} catch {
+		/* absent/unreadable => not halted; the guardian rewrites it every sweep */
+	}
+	return { halted: false };
+}
+
+/** Account equity and gross market value for the gross-exposure cap (B-08). Null on any error (fail-open). */
+async function accountGross(profile: string, signal?: AbortSignal): Promise<{ equity: number; gross: number } | null> {
+	try {
+		const a = (await api("GET", "/v2/account", { profile, signal })) as Record<string, unknown>;
+		const equity = num(a.equity) ?? num(a.portfolio_value);
+		if (equity === undefined || equity <= 0) return null;
+		const longMv = num(a.long_market_value) ?? 0;
+		const shortMv = num(a.short_market_value) ?? 0;
+		return { equity, gross: Math.abs(longMv) + Math.abs(shortMv) };
+	} catch {
+		return null;
+	}
+}
+
+/** True only for a protective stop that cannot increase exposure (B-03). Fetches the live position. */
+async function isReduceOnlyStop(intent: OrderIntent, profile: string, signal?: AbortSignal): Promise<boolean> {
+	if (intent.type !== "stop" && intent.type !== "stop_limit") return false;
+	if (intent.qty === undefined) return false;
+	let held: number;
+	try {
+		held = await currentQty(intent.symbol, signal, profile);
+	} catch {
+		return false; // cannot confirm reduce-only => treat as a normal order (full caps apply)
+	}
+	if (intent.side === "sell" && held > 0 && intent.qty <= held + 1e-9) return true;
+	if (intent.side === "buy" && held < 0 && intent.qty <= Math.abs(held) + 1e-9) return true;
+	return false;
+}
+
+/** Whether an order increases net exposure (a buy that isn't a pure cover, or a short-opening sell). */
+async function increasesExposure(intent: OrderIntent, profile: string, signal?: AbortSignal): Promise<boolean> {
+	let held: number;
+	try {
+		held = await currentQty(intent.symbol, signal, profile);
+	} catch {
+		return intent.side === "buy"; // unknown position: a buy is conservatively exposure-increasing
+	}
+	if (intent.side === "buy") {
+		const covering = held < 0 && intent.qty !== undefined && intent.qty <= Math.abs(held) + 1e-9;
+		return !covering;
+	}
+	if (held <= 0) return true; // opening or adding to a short
+	if (intent.qty !== undefined && intent.qty > held + 1e-9) return true; // sells through flat into a short
+	return false; // reduces a long
+}
+
+type Decision = { allowed: boolean; reasons: string[]; notional?: number; basis: string; reduceOnly?: boolean };
 
 async function evaluate(intent: OrderIntent, signal?: AbortSignal, profileName?: string): Promise<Decision> {
 	const reasons: string[] = [];
@@ -497,7 +565,13 @@ async function evaluate(intent: OrderIntent, signal?: AbortSignal, profileName?:
 	if (!bounded && policy.requireBoundedNotional) {
 		reasons.push(`Cannot bound worst-case cost (${basis}); policy requires a bounded order.`);
 	}
-	if (notional !== undefined) {
+
+	// Reduce-only protective stops (a sell-stop capped at the held long, or a buy-stop
+	// capped at the held short) cannot increase exposure, so they are exempt from the
+	// size and rate budget (B-03) - protection must never lose the budget race to entries.
+	const reduceOnly = await isReduceOnlyStop(intent, profile, signal);
+
+	if (notional !== undefined && !reduceOnly) {
 		if (notional > policy.maxOrderNotional) {
 			reasons.push(
 				`Order notional ${money(notional)} exceeds maxOrderNotional ${money(policy.maxOrderNotional)}.`,
@@ -515,12 +589,47 @@ async function evaluate(intent: OrderIntent, signal?: AbortSignal, profileName?:
 		}
 	}
 
-	if (ledger.dayOrders >= policy.maxOrdersPerDay) {
-		reasons.push(`Daily order count ${ledger.dayOrders}/${policy.maxOrdersPerDay} reached.`);
+	if (!reduceOnly) {
+		if (ledger.dayOrders >= policy.maxOrdersPerDay) {
+			reasons.push(`Daily order count ${ledger.dayOrders}/${policy.maxOrdersPerDay} reached.`);
+		}
+		const lastHour = ledger.recent.filter((entry) => entry.ts >= Date.now() - 3600_000).length;
+		if (lastHour >= policy.maxOrdersPerHour) {
+			reasons.push(`Hourly order count ${lastHour}/${policy.maxOrdersPerHour} reached.`);
+		}
 	}
-	const lastHour = ledger.recent.filter((entry) => entry.ts >= Date.now() - 3600_000).length;
-	if (lastHour >= policy.maxOrdersPerHour) {
-		reasons.push(`Hourly order count ${lastHour}/${policy.maxOrdersPerHour} reached.`);
+
+	// Deterministic portfolio backstops on exposure-increasing orders (B-08): the guardian's
+	// risk-halt breaker, a hard gross-exposure ceiling, and a live option-premium cap. Reduce-only
+	// orders always pass these so protection and de-risking are never blocked.
+	if (!reduceOnly && (await increasesExposure(intent, profile, signal))) {
+		const halt = readRiskHalt(profile);
+		if (halt.halted) {
+			reasons.push(
+				`Deterministic risk breaker engaged (${halt.reason}); only reduce-only orders are allowed until it clears.`,
+			);
+		}
+		if (notional !== undefined && (policy.maxGrossExposurePct || policy.maxOptionPremiumPctEquity)) {
+			const ag = await accountGross(profile, signal); // fail-open: null on error, per-order/daily caps still bind
+			if (ag) {
+				if (policy.maxGrossExposurePct && policy.maxGrossExposurePct > 0) {
+					const projected = ((ag.gross + notional) / ag.equity) * 100;
+					if (projected > policy.maxGrossExposurePct) {
+						reasons.push(
+							`Order would raise gross exposure to ~${projected.toFixed(0)}% of equity, over maxGrossExposurePct ${policy.maxGrossExposurePct}%.`,
+						);
+					}
+				}
+				if (isOption(symbol) && policy.maxOptionPremiumPctEquity && policy.maxOptionPremiumPctEquity > 0) {
+					const premiumPct = (notional / ag.equity) * 100;
+					if (premiumPct > policy.maxOptionPremiumPctEquity) {
+						reasons.push(
+							`Option premium ${money(notional)} is ~${premiumPct.toFixed(0)}% of equity, over maxOptionPremiumPctEquity ${policy.maxOptionPremiumPctEquity}%.`,
+						);
+					}
+				}
+			}
+		}
 	}
 
 	const hash = fingerprint(intent);
@@ -544,7 +653,7 @@ async function evaluate(intent: OrderIntent, signal?: AbortSignal, profileName?:
 		}
 	}
 
-	return { allowed: reasons.length === 0, reasons, notional, basis };
+	return { allowed: reasons.length === 0, reasons, notional, basis, reduceOnly };
 }
 
 /* ------------------------------------------------------------- extension */
@@ -1010,10 +1119,13 @@ export default function alpacaTradingSafety(pi: ExtensionAPI) {
 			}
 
 			const ledger = loadLedger(profile);
-			ledger.dayOrders += 1;
-			ledger.dayNotional += decision.notional ?? 0;
-			ledger.recent.push({ ts: Date.now(), hash: fingerprint(intent), notional: decision.notional ?? 0 });
-			saveLedger(profile, ledger);
+			// Reduce-only protective stops do not consume the entry budget (B-03).
+			if (!decision.reduceOnly) {
+				ledger.dayOrders += 1;
+				ledger.dayNotional += decision.notional ?? 0;
+				ledger.recent.push({ ts: Date.now(), hash: fingerprint(intent), notional: decision.notional ?? 0 });
+				saveLedger(profile, ledger);
+			}
 
 			audit({
 				profile,
